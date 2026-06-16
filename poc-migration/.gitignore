@@ -1,0 +1,26 @@
+# secrets — never commit
+.env
+*.env.local
+
+# .NET build output
+**/bin/
+**/obj/
+**/*.user
+
+# Node
+app/node_modules/
+app/.expo/
+app/dist/
+app/web-build/
+
+# VS
+.vs/
+**/.vs/
+
+# NuGet local
+packages/
+*.nupkg
+
+# OS
+.DS_Store
+Thumbs.db
