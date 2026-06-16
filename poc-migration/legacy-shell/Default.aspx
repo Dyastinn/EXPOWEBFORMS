@@ -19,44 +19,26 @@
       &nbsp;(Real ASP.NET WebForms on .NET Framework 4.8)
     </header>
     <div id="status">Fetching JWT from token endpoint&hellip;</div>
-    <iframe id="expo-frame" src="http://localhost:8081"></iframe>
+    <!-- src is set by JS only after the token is obtained so the auth gate sees it
+         on the very first request to the Expo entry point. -->
+    <iframe id="expo-frame" style="display:none;width:100%;height:600px;border:2px solid #1a3c5e;border-radius:4px;background:#fff;"></iframe>
   </form>
 
   <script>
-    const EXPO_ORIGIN = 'http://localhost:8081';
-    let pendingToken = null;
-    let frameReady   = false;
-
     fetch('/Handlers/TokenHandler.ashx', { method: 'POST' })
-      .then(r => r.json())
-      .then(({ access_token }) => {
-        pendingToken = access_token;
-        document.getElementById('status').textContent = 'JWT obtained. Waiting for Expo frame…';
-        trySend();
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        document.getElementById('status').textContent = 'JWT obtained. Loading Expo app…';
+        var frame = document.getElementById('expo-frame');
+        frame.src = 'http://localhost:8081?token=' + encodeURIComponent(data.access_token);
+        frame.style.display = '';
       })
-      .catch(err => {
+      .catch(function(err) {
         document.getElementById('status').textContent = 'Token fetch failed: ' + err;
       });
 
-    window.addEventListener('message', function(event) {
-      if (event.origin !== EXPO_ORIGIN) return;
-      if (event.data?.type === 'EXPO_READY') {
-        frameReady = true;
-        document.getElementById('status').textContent = 'Expo frame ready. Sending JWT…';
-        trySend();
-      }
-    });
-
-    function trySend() {
-      if (!pendingToken || !frameReady) return;
-      document.getElementById('expo-frame')
-        .contentWindow.postMessage({ type: 'AUTH_TOKEN', token: pendingToken }, EXPO_ORIGIN);
-      document.getElementById('status').textContent = 'JWT handed to Expo frame via postMessage ✓';
-    }
-
     document.getElementById('expo-frame').addEventListener('load', function() {
-      frameReady = true;
-      trySend();
+      document.getElementById('status').textContent = 'Expo app loaded ✓';
     });
   </script>
 </body>
