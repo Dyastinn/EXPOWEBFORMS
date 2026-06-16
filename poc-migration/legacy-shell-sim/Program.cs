@@ -3,8 +3,17 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
 
+// JWT secret — must be set in production via environment variable.
+// In Development a hardcoded fallback lets `dotnet run` work without extra setup.
+var isDev = string.Equals(
+    Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production",
+    "Development",
+    StringComparison.OrdinalIgnoreCase);
+
 var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET")
-    ?? throw new InvalidOperationException("JWT_SECRET environment variable is not set.");
+    ?? (isDev
+        ? "dev-only-secret-change-in-production-32chars!"
+        : throw new InvalidOperationException("JWT_SECRET environment variable is not set."));
 
 // EXPO_APP_URL controls where the iframe points:
 //   "http://localhost:8081"  → dev mode  (Metro bundler, two-origin, CORS required)

@@ -3,6 +3,7 @@
     "PocApi": {
       "commandName": "Project",
       "applicationUrl": "http://localhost:5050",
+      "launchUrl": "swagger",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }

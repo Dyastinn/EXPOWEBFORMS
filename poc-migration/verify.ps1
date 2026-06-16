@@ -34,8 +34,9 @@ Pass "JWT_SECRET is set"
 Section "Database"
 $root = $PSScriptRoot
 try {
-  sqlcmd -S $SqlServer -d $Database -E -i "$root\db\setup.sql" | Out-Null
-  sqlcmd -S $SqlServer -d $Database -E -i "$root\db\seed.sql"  | Out-Null
+  sqlcmd -S $SqlServer -d $Database -E -i "$root\db\setup.sql"        | Out-Null
+  sqlcmd -S $SqlServer -d $Database -E -i "$root\db\seed.sql"         | Out-Null
+  sqlcmd -S $SqlServer -d $Database -E -i "$root\db\migrate_crud.sql" | Out-Null
   Pass "DB setup + seed applied"
 } catch {
   Fail "DB setup failed: $_"; exit 1
@@ -113,10 +114,11 @@ if ($token) {
 if ($token) {
   try {
     $r         = Invoke-WebRequest "$ApiUrl/api/customers" -Headers @{ Authorization="Bearer $token" } -UseBasicParsing -TimeoutSec 5
-    $customers = $r.Content | ConvertFrom-Json
+    $paged     = $r.Content | ConvertFrom-Json
+    $customers = $paged.items
     $hasTier   = @($customers | Where-Object { $_.tier -ne $null -and $_.tier -ne "" })
     if ($r.StatusCode -eq 200 -and $customers.Count -gt 0 -and $hasTier.Count -eq $customers.Count) {
-      Pass "Valid token -> 200, $($customers.Count) customers, all have Tier (proc business logic)"
+      Pass "Valid token -> 200, $($paged.totalCount) customers, all have Tier (proc business logic)"
       $customers | ForEach-Object {
         Write-Host "    $($_.name) | Spend: $($_.totalSpend) | Tier: $($_.tier)" -ForegroundColor Gray
       }
@@ -134,7 +136,7 @@ if ($token) {
       Authorization = "Bearer $token"
       Origin        = "http://localhost:8081"
     }
-    $r = Invoke-WebRequest "$ApiUrl/api/customers" -Headers $headers -UseBasicParsing -TimeoutSec 5
+    $r = Invoke-WebRequest "$ApiUrl/api/customers?page=1&pageSize=5" -Headers $headers -UseBasicParsing -TimeoutSec 5
     $acao = $r.Headers["Access-Control-Allow-Origin"]
     if ($acao -eq "http://localhost:8081") {
       Pass "CORS: Access-Control-Allow-Origin = http://localhost:8081"
