@@ -92,25 +92,24 @@ export default function App() {
 
     if (Platform.OS === 'web') {
       if (window.parent !== window) {
-        // Embedded in an iframe.  The shell validated the token server-side before
-        // serving this page and passed it as a URL query parameter.  Extract it
-        // here and immediately clean the URL so the token doesn't linger in browser
-        // history or leak via Referer headers on sub-resource requests.
-        const params   = new URLSearchParams(window.location.search);
-        const urlToken = params.get('token');
-        if (urlToken) {
-          inMemoryToken = urlToken;
-          window.history.replaceState({}, '', window.location.pathname);
+        // Embedded in an iframe — wait for the shell to postMessage the token.
+        setStatus('Waiting for token from shell…');
+        const onMessage = (event: MessageEvent) => {
+          if (event.source !== window.parent) return;
+          if (event.origin !== 'http://localhost:5000') return;
+          const msg = event.data as { type?: string; token?: string };
+          if (msg?.type !== 'AUTH_TOKEN' || !msg.token) return;
+          window.removeEventListener('message', onMessage);
+          inMemoryToken = msg.token;
           setTokenSource('iframe');
           loadPage(1);
-        } else {
-          setStatus('Unauthorized: no token provided.');
-        }
-      } else {
-        // Direct browser tab — self-generate.
-        setTokenSource('standalone');
-        fetchToken();
+        };
+        window.addEventListener('message', onMessage);
+        return () => window.removeEventListener('message', onMessage);
       }
+      // Direct browser tab — self-generate.
+      setTokenSource('standalone');
+      fetchToken();
       return;
     }
 

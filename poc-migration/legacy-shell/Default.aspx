@@ -18,28 +18,43 @@
       <em><asp:Label ID="lblUser" runat="server" /></em>
       &nbsp;(Real ASP.NET WebForms on .NET Framework 4.8)
     </header>
-    <div id="status">Fetching JWT from token endpoint&hellip;</div>
-    <!-- src is set by JS only after the token is obtained so the auth gate sees it
-         on the very first request to the Expo entry point. -->
-    <iframe id="expo-frame" style="display:none;width:100%;height:600px;border:2px solid #1a3c5e;border-radius:4px;background:#fff;"></iframe>
+    <div id="status">Fetching JWT…</div>
+    <iframe id="expo-frame" src="http://localhost:8081" style="width:100%;height:600px;border:2px solid #1a3c5e;border-radius:4px;background:#fff;"></iframe>
   </form>
 
   <script>
+    var frame        = document.getElementById('expo-frame');
+    var targetOrigin = 'http://localhost:8081';
+    var pendingToken = null;
+    var frameReady   = false;
+
+    function trySendToken() {
+      if (pendingToken && frameReady) {
+        frame.contentWindow.postMessage({ type: 'AUTH_TOKEN', token: pendingToken }, targetOrigin);
+        document.getElementById('status').textContent = 'Expo app loaded ✓';
+      }
+    }
+
+    frame.addEventListener('load', function() {
+      frameReady = true;
+      document.getElementById('status').textContent = pendingToken
+        ? 'Expo loaded. Sending token…'
+        : 'Expo loaded. Waiting for token…';
+      trySendToken();
+    });
+
     fetch('/Handlers/TokenHandler.ashx', { method: 'POST' })
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        document.getElementById('status').textContent = 'JWT obtained. Loading Expo app…';
-        var frame = document.getElementById('expo-frame');
-        frame.src = 'http://localhost:8081?token=' + encodeURIComponent(data.access_token);
-        frame.style.display = '';
+        pendingToken = data.access_token;
+        document.getElementById('status').textContent = frameReady
+          ? 'Token obtained. Sending…'
+          : 'Token obtained. Waiting for Expo to load…';
+        trySendToken();
       })
       .catch(function(err) {
         document.getElementById('status').textContent = 'Token fetch failed: ' + err;
       });
-
-    document.getElementById('expo-frame').addEventListener('load', function() {
-      document.getElementById('status').textContent = 'Expo app loaded ✓';
-    });
   </script>
 </body>
 </html>

@@ -29,90 +29,6 @@ builder.Services.AddHttpClient("api", client =>
 var app = builder.Build();
 app.UseCors();
 
-// ── Iframe auth gate (/app/* — same-origin static export only) ────────────────
-// For every entry-point request (the index.html), require a bearer token supplied
-// as a query parameter.  The token is validated against the API; if valid a session
-// cookie is issued so subsequent sub-resource requests (JS bundles, images) pass
-// through freely — they are useless without the already-delivered HTML.
-// Dev-mode (Metro on :8081) skips this gate because Metro has no middleware layer;
-// in that mode the Expo client still reads the token from the URL client-side, and
-// the API validates it on every authenticated call.
-if (isSameOrigin)
-{
-    app.UseWhen(
-        ctx => ctx.Request.Path.StartsWithSegments("/app"),
-        branch => branch.Use(async (ctx, next) =>
-        {
-            var path    = ctx.Request.Path.Value ?? "";
-            var isEntry = path is "/app" or "/app/"
-                          || path.EndsWith("/app/index.html", StringComparison.OrdinalIgnoreCase);
-
-            // Sub-resources (bundles, images) bypass the token check once index.html is served.
-            if (!isEntry) { await next(); return; }
-
-            // Prefer the query-param token (first iframe load); fall back to session cookie.
-            var token      = ctx.Request.Query["token"].FirstOrDefault();
-            var fromCookie = string.IsNullOrEmpty(token);
-            if (fromCookie)
-                token = ctx.Request.Cookies["expo_session"];
-
-            if (string.IsNullOrEmpty(token))
-            {
-                await WriteUnauthorized(ctx, "Missing authorization token.");
-                return;
-            }
-
-            // Validate the token against the API — enforced server-side.
-            var http = ctx.RequestServices
-                          .GetRequiredService<IHttpClientFactory>()
-                          .CreateClient("api");
-            http.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", token);
-
-            HttpResponseMessage apiResponse;
-            try
-            {
-                apiResponse = await http.GetAsync("api/auth/validate");
-            }
-            catch (Exception ex)
-            {
-                ctx.Response.StatusCode  = StatusCodes.Status503ServiceUnavailable;
-                ctx.Response.ContentType = "text/plain";
-                await ctx.Response.WriteAsync(
-                    $"Authorization service unavailable: {ex.Message}");
-                return;
-            }
-
-            if (!apiResponse.IsSuccessStatusCode)
-            {
-                if (fromCookie)
-                    ctx.Response.Cookies.Delete("expo_session");
-
-                await WriteUnauthorized(ctx, "Token is invalid or expired.");
-                return;
-            }
-
-            // Token validated — issue a session cookie for sub-resource requests.
-            if (!fromCookie)
-            {
-                ctx.Response.Cookies.Append("expo_session", token, new CookieOptions
-                {
-                    HttpOnly = true,
-                    SameSite = SameSiteMode.Strict,
-                    Secure   = false,   // set true behind HTTPS in production
-                    MaxAge   = TimeSpan.FromHours(1),
-                    Path     = "/app",
-                });
-            }
-
-            // Restrict framing: only this shell origin may embed the Expo app.
-            ctx.Response.Headers.ContentSecurityPolicy =
-                $"frame-ancestors {ctx.Request.Scheme}://{ctx.Request.Host}";
-
-            await next();
-        }));
-}
-
 // Serve /app/* as static files from wwwroot/app/ (same-origin mode).
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -138,15 +54,14 @@ app.MapPost("/token", async (IHttpClientFactory factory) =>
 });
 
 // GET / — legacy shell host page.
-// The iframe src is intentionally left blank in the initial HTML; client-side JS
-// fetches the JWT first, then sets the src with the token as a query parameter so
-// the auth gate sees it on the very first request to the Expo entry point.
 app.MapGet("/", () =>
 {
-    var iframeSrc  = isSameOrigin ? "/app/" : expoAppUrl;
-    var modeLabel  = isSameOrigin
-        ? "same-origin mode — Expo served from /app/ (static export, server-side auth gate active)"
-        : "dev mode — Expo on http://localhost:8081 (Metro, client-side token only)";
+    var iframeSrc      = isSameOrigin ? "/app/" : expoAppUrl;
+    // postMessage targetOrigin: same-origin uses the page's own origin; dev uses the Metro URL.
+    var targetOriginJs = isSameOrigin ? "window.location.origin" : $"'{expoAppUrl}'";
+    var modeLabel      = isSameOrigin
+        ? "same-origin mode — Expo served from /app/"
+        : "dev mode — Expo on http://localhost:8081 (Metro)";
 
     var html = $$"""
         <!DOCTYPE html>
@@ -167,26 +82,42 @@ app.MapGet("/", () =>
             <strong>Legacy WebForms Shell</strong> &mdash; Logged in as <em>Demo User</em>
             <div class="mode">{{modeLabel}}</div>
           </header>
-          <div id="status">Fetching JWT from token endpoint&hellip;</div>
-          <!-- src is set by JS only after the token is obtained -->
-          <iframe id="expo-frame" style="display:none;width:100%;height:600px;border:2px solid #1a3c5e;border-radius:4px;background:#fff;"></iframe>
+          <div id="status">Fetching JWT…</div>
+          <iframe id="expo-frame" src="{{iframeSrc}}" style="width:100%;height:600px;border:2px solid #1a3c5e;border-radius:4px;background:#fff;"></iframe>
 
           <script>
+            var frame        = document.getElementById('expo-frame');
+            var targetOrigin = {{targetOriginJs}};
+            var pendingToken = null;
+            var frameReady   = false;
+
+            function trySendToken() {
+              if (pendingToken && frameReady) {
+                frame.contentWindow.postMessage({ type: 'AUTH_TOKEN', token: pendingToken }, targetOrigin);
+                document.getElementById('status').textContent = 'Expo app loaded ✓';
+              }
+            }
+
+            frame.addEventListener('load', function() {
+              frameReady = true;
+              document.getElementById('status').textContent = pendingToken
+                ? 'Expo loaded. Sending token…'
+                : 'Expo loaded. Waiting for token…';
+              trySendToken();
+            });
+
             fetch('/token', { method: 'POST' })
               .then(function(r) { return r.json(); })
               .then(function(data) {
-                document.getElementById('status').textContent = 'JWT obtained. Loading Expo app…';
-                var frame = document.getElementById('expo-frame');
-                frame.src = '{{iframeSrc}}?token=' + encodeURIComponent(data.access_token);
-                frame.style.display = '';
+                pendingToken = data.access_token;
+                document.getElementById('status').textContent = frameReady
+                  ? 'Token obtained. Sending…'
+                  : 'Token obtained. Waiting for Expo to load…';
+                trySendToken();
               })
               .catch(function(err) {
                 document.getElementById('status').textContent = 'Token fetch failed: ' + err;
               });
-
-            document.getElementById('expo-frame').addEventListener('load', function() {
-              document.getElementById('status').textContent = 'Expo app loaded ✓';
-            });
           </script>
         </body>
         </html>
@@ -196,38 +127,3 @@ app.MapGet("/", () =>
 });
 
 app.Run();
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-static async Task WriteUnauthorized(HttpContext ctx, string reason)
-{
-    ctx.Response.StatusCode  = StatusCodes.Status401Unauthorized;
-    ctx.Response.ContentType = "text/html";
-    // $$""" — double-$ raw string: single { } are literal (correct for CSS rules);
-    // {{reason}} is the C# interpolation.
-    await ctx.Response.WriteAsync(
-        $$"""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8" />
-          <title>401 Unauthorized</title>
-          <style>
-            body { font-family: sans-serif; display: flex; align-items: center;
-                   justify-content: center; min-height: 100vh; margin: 0; background: #f0f2f5; }
-            .box { text-align: center; padding: 40px; background: #fff; border-radius: 8px;
-                   box-shadow: 0 2px 8px rgba(0,0,0,.12); }
-            h1   { color: #c0392b; margin: 0 0 12px; }
-            p    { color: #666; margin: 4px 0; }
-          </style>
-        </head>
-        <body>
-          <div class="box">
-            <h1>401 Unauthorized</h1>
-            <p>{{reason}}</p>
-            <p>A valid authorization token is required to access this application.</p>
-          </div>
-        </body>
-        </html>
-        """);
-}
