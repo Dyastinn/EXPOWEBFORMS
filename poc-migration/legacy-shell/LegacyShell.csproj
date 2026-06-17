@@ -30,6 +30,14 @@
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -39,6 +47,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Default.aspx" />
+    <Content Include="Login.aspx" />
     <Content Include="Handlers\TokenHandler.ashx" />
     <Content Include="web.config" />
   </ItemGroup>
@@ -50,12 +59,24 @@
     <Compile Include="Default.aspx.designer.cs">
       <DependentUpon>Default.aspx</DependentUpon>
     </Compile>
+    <Compile Include="Login.aspx.cs">
+      <DependentUpon>Login.aspx</DependentUpon>
+      <SubType>ASPXCodeBehind</SubType>
+    </Compile>
+    <Compile Include="Login.aspx.designer.cs">
+      <DependentUpon>Login.aspx</DependentUpon>
+    </Compile>
     <Compile Include="Handlers\TokenHandler.ashx.cs">
       <DependentUpon>TokenHandler.ashx</DependentUpon>
     </Compile>
     <Compile Include="Helpers\ApiClient.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
+<PropertyGroup>
+  <VisualStudioVersion Condition="'$(VisualStudioVersion)' == ''">18.0</VisualStudioVersion>
+  <VSToolsPath Condition="'$(VSToolsPath)' == ''">C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VisualStudio\v18.0</VSToolsPath>
+</PropertyGroup>
+
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
   <!-- VS 2022 web application targets -->
   <Import Project="$(VSToolsPath)\WebApplications\Microsoft.WebApplication.targets"

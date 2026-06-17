@@ -21,7 +21,7 @@ const PAGE_SIZE = 5;
 
 // The trusted shell origin for the iframe postMessage flow.
 // This is a security check — not used to fetch tokens.
-const SHELL_ORIGIN = 'http://localhost:5000';
+const SHELL_ORIGIN = ['http://localhost:5000','http://localhost:5001'];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Customer = {
@@ -129,9 +129,10 @@ export default function App() {
       // Iframe: token arrives via postMessage from the parent shell.
       // We do not fetch it ourselves — the shell is the auth authority here.
       setAuthMode('iframe');
-      addLog('Detected iframe context', `waiting for postMessage from ${SHELL_ORIGIN}`);
+      addLog('Detected iframe context', `waiting for postMessage from iframe`);
 
       const onMessage = async (event: MessageEvent) => {
+
         addLog(
           'postMessage received',
           `origin=${event.origin}  type=${(event.data as { type?: string })?.type ?? '?'}`,
@@ -142,7 +143,7 @@ export default function App() {
           return;
         }
         // Verify the message came from the known shell origin (security check).
-        if (event.origin !== SHELL_ORIGIN) {
+        if (!SHELL_ORIGIN.includes(event.origin)) {
           addLog('Rejected: untrusted origin', event.origin);
           return;
         }
@@ -509,7 +510,7 @@ export default function App() {
             {Platform.OS === 'web' && window.parent !== window && (
               <View style={styles.dbgRow}>
                 <Text style={styles.dbgKey}>Trusted origin</Text>
-                <Text style={styles.dbgVal}>{SHELL_ORIGIN}</Text>
+                <Text style={styles.dbgVal}>{SHELL_ORIGIN.join(', ')}</Text>
               </View>
             )}
             <View style={styles.dbgRow}>
