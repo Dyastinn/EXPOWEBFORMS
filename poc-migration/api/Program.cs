@@ -19,6 +19,14 @@ var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET")
 var jwtIssuer   = builder.Configuration["Jwt:Issuer"]!;
 var jwtAudience = builder.Configuration["Jwt:Audience"]!;
 
+// SHELL_API_KEY — pre-shared credential that authorises the WebForms shell / shell-sim
+// to call POST /api/auth/token.  Only systems that hold this key can request tokens;
+// shells can no longer forge tokens by reusing JWT_SECRET, which stays API-private.
+var shellApiKey = Environment.GetEnvironmentVariable("SHELL_API_KEY")
+    ?? (builder.Environment.IsDevelopment()
+        ? "poc-shell-api-key-change-in-production"
+        : throw new InvalidOperationException("SHELL_API_KEY environment variable is not set."));
+
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -37,6 +45,13 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+
+// Register the secrets as keyed singletons so AuthController can receive them
+// via constructor injection without re-reading environment variables in each request.
+builder.Services.AddKeyedSingleton("JwtSecret",   jwtSecret);
+builder.Services.AddKeyedSingleton("JwtIssuer",   jwtIssuer);
+builder.Services.AddKeyedSingleton("JwtAudience", jwtAudience);
+builder.Services.AddKeyedSingleton("ShellApiKey", shellApiKey);
 
 var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()!;
 builder.Services.AddCors(opts =>

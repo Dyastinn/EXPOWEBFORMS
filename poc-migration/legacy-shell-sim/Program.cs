@@ -1,20 +1,4 @@
-using System.IdentityModel.Tokens.Jwt;
 using System.Net.Http.Headers;
-using System.Security.Claims;
-using System.Text;
-using Microsoft.IdentityModel.Tokens;
-
-// JWT secret — must be set in production via environment variable.
-// In Development a hardcoded fallback lets `dotnet run` work without extra setup.
-var isDev = string.Equals(
-    Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production",
-    "Development",
-    StringComparison.OrdinalIgnoreCase);
-
-var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET")
-    ?? (isDev
-        ? "dev-only-secret-change-in-production-32chars!"
-        : throw new InvalidOperationException("JWT_SECRET environment variable is not set."));
 
 // EXPO_APP_URL controls where the iframe points:
 //   "http://localhost:8081"  → dev mode  (Metro bundler, two-origin, no server-side auth gate)
@@ -23,8 +7,12 @@ var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET")
 var expoAppUrl   = Environment.GetEnvironmentVariable("EXPO_APP_URL") ?? "http://localhost:8081";
 var isSameOrigin = expoAppUrl.StartsWith('/');
 
-// API base URL used to call /api/auth/validate for server-side token enforcement.
-var apiBaseUrl = Environment.GetEnvironmentVariable("API_BASE_URL") ?? "http://localhost:5050";
+// API base URL used to call /api/auth/token (issuance) and /api/auth/validate (gate check).
+var apiBaseUrl  = Environment.GetEnvironmentVariable("API_BASE_URL")  ?? "http://localhost:5050";
+
+// SHELL_API_KEY — pre-shared credential sent to POST /api/auth/token so the API
+// can confirm this shell is an authorised caller before issuing a JWT.
+var shellApiKey = Environment.GetEnvironmentVariable("SHELL_API_KEY") ?? "poc-shell-api-key-change-in-production";
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(opts =>
@@ -129,27 +117,24 @@ if (isSameOrigin)
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-// POST /token — issues a JWT interchangeable with the real WebForms shell's OWIN endpoint.
-app.MapPost("/token", () =>
+// POST /token — proxies to POST /api/auth/token so the API is the sole JWT issuer.
+// The shell no longer holds JWT_SECRET; it authenticates to the API with SHELL_API_KEY.
+app.MapPost("/token", async (IHttpClientFactory factory) =>
 {
-    var key   = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
-    var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-    var now   = DateTime.UtcNow;
+    var http = factory.CreateClient("api");
+    using var req = new HttpRequestMessage(HttpMethod.Post, "api/auth/token");
+    req.Headers.Add("X-Api-Key", shellApiKey);
 
-    var token = new JwtSecurityToken(
-        issuer:             "poc-legacy-shell",
-        audience:           "poc-api",
-        claims:             [
-            new Claim(JwtRegisteredClaimNames.Sub,  "demo-user"),
-            new Claim(JwtRegisteredClaimNames.Name, "Demo User"),
-            new Claim(JwtRegisteredClaimNames.Jti,  Guid.NewGuid().ToString()),
-        ],
-        notBefore:          now,
-        expires:            now.AddHours(1),
-        signingCredentials: creds);
-
-    var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
-    return Results.Ok(new { access_token = tokenString, token_type = "Bearer", expires_in = 3600 });
+    try
+    {
+        var apiResp = await http.SendAsync(req);
+        var body    = await apiResp.Content.ReadAsStringAsync();
+        return Results.Content(body, "application/json", statusCode: (int)apiResp.StatusCode);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Token service unavailable: {ex.Message}", statusCode: 503);
+    }
 });
 
 // GET / — legacy shell host page.

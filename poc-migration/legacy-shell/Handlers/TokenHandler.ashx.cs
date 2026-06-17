@@ -1,63 +1,55 @@
 using System;
-using System.Collections.Generic;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
+using System.Net.Http;
+using System.Threading.Tasks;
 using System.Web;
-using Microsoft.IdentityModel.Tokens;
-using Newtonsoft.Json;
 
 namespace LegacyShell.Handlers
 {
     public class TokenHandler : IHttpHandler
     {
+        // Static so the underlying socket pool is reused across requests.
+        private static readonly HttpClient _http = new HttpClient();
+
         public bool IsReusable => false;
 
         public void ProcessRequest(HttpContext context)
         {
-            // Only respond to POST (matching the shell-sim's /token endpoint contract)
             if (!context.Request.HttpMethod.Equals("POST", StringComparison.OrdinalIgnoreCase))
             {
                 context.Response.StatusCode = 405;
                 return;
             }
 
-            var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET");
-            if (string.IsNullOrEmpty(jwtSecret))
+            var apiBaseUrl  = Environment.GetEnvironmentVariable("API_BASE_URL")  ?? "http://localhost:5050";
+            var shellApiKey = Environment.GetEnvironmentVariable("SHELL_API_KEY") ?? "poc-shell-api-key-change-in-production";
+
+            string responseBody;
+            int    statusCode;
+            try
             {
-                context.Response.StatusCode = 500;
-                context.Response.Write("JWT_SECRET not set");
+                // Classic ASP.NET has a SynchronizationContext that can deadlock on .Result;
+                // Task.Run moves the work to a thread-pool thread where no context is captured.
+                using (var req = new HttpRequestMessage(HttpMethod.Post, apiBaseUrl + "/api/auth/token"))
+                {
+                    req.Headers.Add("X-Api-Key", shellApiKey);
+                    var resp = Task.Run(() => _http.SendAsync(req)).GetAwaiter().GetResult();
+                    responseBody = Task.Run(() => resp.Content.ReadAsStringAsync()).GetAwaiter().GetResult();
+                    statusCode   = (int)resp.StatusCode;
+                }
+            }
+            catch (Exception ex)
+            {
+                context.Response.StatusCode  = 503;
+                context.Response.ContentType = "application/json";
+                context.Response.Write("{\"error\":\"service_unavailable\",\"error_description\":\"" +
+                                       ex.Message.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"}");
                 return;
             }
 
-            var key   = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
-            var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-            var now   = DateTime.UtcNow;
-
-            var token = new JwtSecurityToken(
-                issuer:             "poc-legacy-shell",
-                audience:           "poc-api",
-                claims:             new List<Claim>
-                {
-                    new Claim(JwtRegisteredClaimNames.Sub,  "demo-user"),
-                    new Claim(JwtRegisteredClaimNames.Name, "Demo User"),
-                    new Claim(JwtRegisteredClaimNames.Jti,  Guid.NewGuid().ToString())
-                },
-                notBefore:          now,
-                expires:            now.AddHours(1),
-                signingCredentials: creds);
-
-            var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
-
-            // Allow cross-origin requests so the browser can call this from the shell page
+            context.Response.StatusCode = statusCode;
             context.Response.AddHeader("Access-Control-Allow-Origin", "*");
             context.Response.ContentType = "application/json";
-            context.Response.Write(JsonConvert.SerializeObject(new
-            {
-                access_token = tokenString,
-                token_type   = "Bearer",
-                expires_in   = 3600
-            }));
+            context.Response.Write(responseBody);
         }
     }
 }
