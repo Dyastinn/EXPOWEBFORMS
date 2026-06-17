@@ -2,6 +2,7 @@ using System;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web;
+using System.Web.Script.Serialization;
 
 namespace LegacyShell.Handlers
 {
@@ -27,11 +28,11 @@ namespace LegacyShell.Handlers
             int    statusCode;
             try
             {
-                // Classic ASP.NET has a SynchronizationContext that can deadlock on .Result;
-                // Task.Run moves the work to a thread-pool thread where no context is captured.
                 using (var req = new HttpRequestMessage(HttpMethod.Post, apiBaseUrl + "/api/auth/token"))
                 {
                     req.Headers.Add("X-Api-Key", shellApiKey);
+                    // Classic ASP.NET has a SynchronizationContext that can deadlock on .Result;
+                    // Task.Run moves the work to a thread-pool thread where no context is captured.
                     var resp = Task.Run(() => _http.SendAsync(req)).GetAwaiter().GetResult();
                     responseBody = Task.Run(() => resp.Content.ReadAsStringAsync()).GetAwaiter().GetResult();
                     statusCode   = (int)resp.StatusCode;
@@ -44,6 +45,31 @@ namespace LegacyShell.Handlers
                 context.Response.Write("{\"error\":\"service_unavailable\",\"error_description\":\"" +
                                        ex.Message.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"}");
                 return;
+            }
+
+            // Store the JWT in server-side Session so code-behinds can call the API
+            // without the browser JS needing to pass the token back server-side.
+            // The browser still receives and uses the token for the postMessage→iframe flow.
+            //
+            // SECURITY NOTE (POC): The token is also returned as JSON to the browser below,
+            // which stores it in JS memory and postMessages it to the Expo iframe. That path
+            // has XSS exposure. For a production hardening pass: acquire the token
+            // server-side at form-auth login, write to Session only, and never return the
+            // raw JWT to the browser.
+            if (statusCode == 200)
+            {
+                try
+                {
+                    var json = new JavaScriptSerializer()
+                        .Deserialize<System.Collections.Generic.Dictionary<string, object>>(responseBody);
+
+                    if (json.TryGetValue("access_token", out var tok) && tok is string jwt)
+                        context.Session["auth_jwt"] = jwt;
+                }
+                catch
+                {
+                    // Non-fatal: Session write failure does not break the postMessage flow.
+                }
             }
 
             context.Response.StatusCode = statusCode;
